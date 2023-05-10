@@ -1,20 +1,47 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using BepInEx.Logging;
 
 namespace PrincessDumper
 {
+    /// <summary>
+    /// Provides functionality for runtime dumping of a specified module's memory, including IL2CPP bytes and metadata bytes.
+    /// </summary>
     public class PrincessDumper
     {
-        [DllImport("kernel32.dll")]
-        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+        /// <summary>
+        /// The logger used for logging information and errors.
+        /// </summary>
+        private static ManualLogSource logger { get; set; }
 
-        public static void RuntimeDump(BepInEx.Logging.ManualLogSource logger, out byte[] il2cppBytes, out byte[] metadataBytes)
+        /// <summary>
+        /// Initializes the ExtensionMethods class.
+        /// </summary>
+        static PrincessDumper()
+        {
+            logger = new ManualLogSource("PrincessDumper");
+            Logger.Sources.Add(logger);
+        }
+
+        [DllImport("kernel32.dll")]
+        internal static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        /// <summary>
+        /// Performs a runtime dump of the specified module's memory and retrieves IL2CPP bytes and metadata bytes.
+        /// </summary>
+        /// <param name="il2cppBytes">Output parameter to store the IL2CPP bytes.</param>
+        /// <param name="metadataBytes">Output parameter to store the metadata bytes.</param>
+        public static void RuntimeDump(out byte[] il2cppBytes, out byte[] metadataBytes)
         {
             string moduleName = "GameAssembly.dll";
             Process process = Process.GetCurrentProcess();
             foreach (ProcessModule module in process.Modules)
             {
+                if (module.ModuleName is null)
+                {
+                    break;
+                }
                 if (module.ModuleName.Equals(moduleName, StringComparison.OrdinalIgnoreCase))
                 {
                     byte[] moduleBytes = new byte[module.ModuleMemorySize];
@@ -62,10 +89,7 @@ namespace PrincessDumper
                             logger.LogInfo($"Replacing SizeOfRawData with VirtualSize value of {virtualAddress:X}" + $" stream.Position: {stream.Position}");
                         }
                     }
-                    /*using (FileStream stream = new FileStream("GameAssembly_dump.dll", FileMode.Create, FileAccess.Write))
-                    {
-                        stream.Write(moduleBytes, 0, moduleBytes.Length);
-                    }*/
+
                     logger.LogInfo(string.Format("Processed {0}", moduleName));
                     il2cppBytes = moduleBytes;
 
@@ -88,10 +112,7 @@ namespace PrincessDumper
                         }
                         index = Array.IndexOf(byteArray, pattern[0], index + 1);
                     }
-                    /*using (FileStream stream = new FileStream("global-metadata.dat", FileMode.Create, FileAccess.Write))
-                    {
-                        stream.Write(byteArray, 0, byteArray.Length);
-                    }*/
+
                     logger.LogInfo(string.Format("Processed {0}", "global-metadata.dat"));
                     metadataBytes = byteArray;
                     return;
@@ -101,6 +122,38 @@ namespace PrincessDumper
             il2cppBytes = Array.Empty<byte>();
             metadataBytes = Array.Empty<byte>();
             return;
+        }
+
+        /// <summary>
+        /// Validates the metadata by checking if the IL2CPP bytes and metadata bytes are the same.
+        /// If they are the same, it searches for the global-metadata.dat file at the specified path
+        /// and updates the metadata bytes accordingly. If the file is not found, it prompts the user
+        /// to input the file path manually.
+        /// </summary>
+        /// <param name="metadataPath">The path to the global-metadata.dat file.</param>
+        /// <param name="il2cppBytes">The IL2CPP file bytes.</param>
+        /// <param name="metadataBytes">The metadata file bytes.</param>
+        public static void ValidateMetadata(string metadataPath, byte[] il2cppBytes, ref byte[] metadataBytes)
+        {
+            //metadataBytes will equal il2cppBytes if the search pattern did not match.
+            //In this case, global-metadata.dat is not embedded in GameAssembly.dll and most likely at the default path.
+            if (il2cppBytes == metadataBytes)
+            {
+                logger.LogWarning("global-metadata.dat is not embedded in GameAssembly.dll.");
+                if (File.Exists(metadataPath))
+                {
+                    logger.LogWarning("Found global-metadata.dat at the default path, using it instead.");
+                    metadataBytes = File.ReadAllBytes(metadataPath);
+                }
+                else
+                {
+                    logger.LogWarning("global-meatadata.dat is not found at the default location. " +
+                        "It may be hidden somewhere else. " +
+                        "\n Input the file path: (Example: C:\\Users\\_\\{YourGame}\\fake-global-metadata-name.fakeExtension");
+                    metadataPath = Path.Combine(Console.ReadLine());
+                    metadataBytes = File.ReadAllBytes(metadataPath);
+                }
+            }
         }
     }
 }
